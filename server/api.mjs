@@ -2,6 +2,7 @@ import fsp from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
+import { createHash, timingSafeEqual } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import { schemeHasHandler, schemeOf } from './lib/xdg.mjs'
 import { openInTerminal } from './lib/terminal.mjs'
@@ -324,6 +325,13 @@ for (const addrs of Object.values(os.networkInterfaces())) {
   }
 }
 
+// And whatever name a reverse proxy serves it under. The proxy forwards the public `Host`, and
+// the page it served sends that same name as its `Origin` — neither is on the list above, so
+// without this a colony behind `bots.example.com` refuses its own page.
+for (const name of (process.env.BOT_CROSSING_ALLOWED_HOSTS || '').split(',')) {
+  if (name.trim()) LOCAL_HOSTS.add(name.trim().toLowerCase())
+}
+
 /** Hostname out of a `Host:` or `Origin:` value, with the port and any brackets stripped. */
 function hostnameOf(value) {
   if (!value) return ''
@@ -360,6 +368,48 @@ function isLocalRequest(req) {
   return req.method === 'GET' || req.method === 'HEAD'
 }
 
+const LOOPBACK = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1'])
+
+/** Compared as digests, so neither the length of the token nor how much of it matched leaks. */
+function bearerMatches(header, token) {
+  const given = /^Bearer (.+)$/.exec(String(header || ''))?.[1] || ''
+  const digest = (s) => createHash('sha256').update(s).digest()
+  return timingSafeEqual(digest(given), digest(token))
+}
+
+/**
+ * Why a request is turned away, or null if it is not.
+ *
+ * The Host and Origin checks above stop a *web page* driving the server. They do nothing about
+ * another device asking directly, which is exactly what a colony serving its threads to a hub on
+ * another machine invites. Two switches for that, both about callers that are not this machine —
+ * the page in a browser here is as trusted as it ever was:
+ *
+ *   - `BOT_CROSSING_READONLY` refuses anything but a read. A machine that exists to be looked at
+ *     has no reason to let the network open threads, reveal folders or start sessions on it.
+ *   - `BOT_CROSSING_TOKEN` must arrive as a bearer token. A read that carries it skips the Host
+ *     check: that check is there for browsers, and whoever holds the token is not a rebound page.
+ *
+ * "This machine" is the socket's address, so a reverse proxy running here makes every caller
+ * local and neither switch applies behind it. Put the authentication on the proxy.
+ */
+export function refusal(req) {
+  const remote = !LOOPBACK.has(req.socket?.remoteAddress)
+  const reading = req.method === 'GET' || req.method === 'HEAD'
+
+  if (remote && !reading && /^(1|true|yes)$/i.test(process.env.BOT_CROSSING_READONLY || '')) {
+    return { status: 403, error: 'This Bot Crossing is read-only from other machines' }
+  }
+  const token = process.env.BOT_CROSSING_TOKEN
+  if (remote && token) {
+    if (!bearerMatches(req.headers.authorization, token)) {
+      return { status: 401, error: 'This Bot Crossing needs its token from other machines' }
+    }
+    if (reading) return null
+  }
+  return isLocalRequest(req) ? null : { status: 403, error: 'Bot Crossing only answers its own page on this machine' }
+}
+
 function readJsonBody(req, limit = 4 * 1024 * 1024) {
   return new Promise((resolve, reject) => {
     let size = 0
@@ -389,9 +439,8 @@ export async function apiMiddleware(req, res, next) {
   const url = new URL(req.url, 'http://localhost')
   if (!url.pathname.startsWith('/api/')) return next ? next() : send(res, 404, { error: 'Not found' })
 
-  if (!isLocalRequest(req)) {
-    return send(res, 403, { error: 'Bot Crossing only answers its own page on this machine' })
-  }
+  const refused = refusal(req)
+  if (refused) return send(res, refused.status, { error: refused.error })
 
   try {
     if (url.pathname === '/api/threads' && req.method === 'GET') {

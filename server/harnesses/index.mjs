@@ -13,8 +13,10 @@ import cursor from './cursor.mjs'
 import hermes from './hermes.mjs'
 import kilocode from './kilocode.mjs'
 import opencode from './opencode.mjs'
+import { remoteHarnesses } from './remote.mjs'
 
-export const HARNESSES = [claudeCode, codex, cursor, antigravity, hermes, kilocode, opencode]
+// Other machines' colonies come last, and only when BOT_CROSSING_PEERS names any.
+export const HARNESSES = [claudeCode, codex, cursor, antigravity, hermes, kilocode, opencode, ...remoteHarnesses()]
 
 export const harnessById = (id) => HARNESSES.find((h) => h.id === id) || null
 

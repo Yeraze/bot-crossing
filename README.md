@@ -807,6 +807,53 @@ password, because there was never meant to be anything to guard.
 Fine on a network you own. Not something to leave running on café wifi, and worth remembering
 that a machine on a VPN or a mesh network is reachable by everything else on it too.
 
+### Several machines, one colony
+
+One colony can show the threads of every machine you work on. Each of the others runs its own
+Bot Crossing as a **peer** — no build and no page, just the scanner answering over HTTP — and the
+one you look at, the **hub**, reads them as though each were one more harness.
+
+On every peer:
+
+```bash
+BOT_CROSSING_HOST=0.0.0.0 BOT_CROSSING_TOKEN=<a long secret> BOT_CROSSING_READONLY=1 npm run serve
+```
+
+On the hub:
+
+```bash
+BOT_CROSSING_PEERS=studio=http://192.168.1.20:5274,mini=http://100.64.0.3:5274 \
+BOT_CROSSING_PEER_TOKEN=<the same secret> \
+BOT_CROSSING_ALLOWED_HOSTS=bots.example.com \
+npm start
+```
+
+| | |
+| --- | --- |
+| `BOT_CROSSING_PEERS` | `name=url` pairs. The name is what the machine is called on the map: lower-case letters, digits and dashes |
+| `BOT_CROSSING_PEER_TOKEN` | What the hub sends to its peers |
+| `BOT_CROSSING_TOKEN` | What a server demands of callers on *other* machines. Its own page, in a browser on the same machine, never needs it |
+| `BOT_CROSSING_READONLY` | Refuses anything but a read from another machine — no opening threads, revealing folders or starting sessions over the network |
+| `BOT_CROSSING_ALLOWED_HOSTS` | Names a reverse proxy serves the colony under, so the `Host` and `Origin` checks accept them |
+
+A peer's repos get ground of their own, named for the machine: `studio/bot-crossing` is a
+different zone from this machine's `bot-crossing`, even when both are the same checkout at the
+same path. Its bots carry the machine's name where a local one carries its harness.
+
+**Remote threads are for looking at.** Open, New conversation and Finder are refused for them —
+the thread lives in an app on another machine, and the most a hub could do is bring a window
+forward on a screen you are not sitting at. Archive and Viewed work, and are recorded in the
+hub's own `data/colony.json`; nothing is written on the peer and nothing but a `GET` is sent to it.
+
+A peer that stops answering keeps its bots on the map, standing idle, and the hub says once that
+it could not be read. They pick up again when it comes back.
+
+Two things to know about the guards. "Another machine" is judged by the address the connection
+came from, so behind a reverse proxy on the same machine every caller looks local and neither the
+token nor read-only applies — **put the authentication on the proxy**, because the hub's API can
+still open things on the hub. And the token crosses the network in the clear unless the peer URL
+is `https://` or the network is one you trust: a VPN or mesh address is the easy way to get that.
+
 ### Picking the terminal
 
 `BOT_CROSSING_TERMINAL` names the emulator a thread opens in, ahead of `$TERMINAL` and whatever the desktop has:
@@ -825,7 +872,7 @@ What it touches on disk, in full:
 | --- | --- |
 | Reads | Your harness's own session records and transcripts |
 | Writes | `data/colony.json`, and **one** `isArchived` field per archived thread |
-| Sends | Nothing. No network calls, no telemetry, no account |
+| Sends | Nothing, unless you name peers: then a `GET` to each of them, and nothing else. No telemetry, no account |
 
 `data/colony.json` holds the names and paths of the repos you work in, so it is gitignored —
 worth knowing before you copy one into an issue.
@@ -837,6 +884,7 @@ server/
   harnesses/   one adapter per agent harness — README.md is the contract
     index.mjs    the registry: add your harness to the list here
     claude-code.mjs
+    remote.mjs   another machine's Bot Crossing, read as a harness
   lib/         filesystem helpers the adapters share
   scan.mjs     harness-agnostic: asks every detected harness, merges, sorts
   api.mjs      /api/threads, /api/harnesses, /api/state, /api/open, /api/archive,

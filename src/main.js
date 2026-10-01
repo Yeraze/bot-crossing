@@ -996,6 +996,17 @@ function chimeForNewWaiting(list, archivedSet, hiddenSet) {
   for (const id of waiting) waitingBefore.add(id)
 }
 
+/**
+ * A harness that is present but could not be read — a store it does not understand, another
+ * machine that has stopped answering. Said once when it starts, not on every poll after.
+ */
+let warned = new Set()
+function noteWarnings(list) {
+  const now = new Set(list || [])
+  for (const warning of now) if (!warned.has(warning)) hud.toast(warning, 'err')
+  warned = now
+}
+
 let polling = false
 async function poll() {
   if (polling) return
@@ -1003,6 +1014,7 @@ async function poll() {
   try {
     const res = await fetchThreads()
     applyThreads(res.threads || [])
+    noteWarnings(res.warnings)
     hud.removeBoot()
   } catch (err) {
     hud.toast(err.message || 'Could not reach the thread scanner', 'err')
